@@ -1,16 +1,59 @@
-# whiteboard_app
+# IFP Whiteboard Application
 
-A new Flutter project.
+A whiteboard application designed for Android-based Interactive Flat Panels (IFPs) with local saving functionality.
 
-## Getting Started
+## Features
 
-This project is a starting point for a Flutter application.
+- Freehand drawing with adjustable stroke width and color
+- Insert shapes (rectangle, circle, line, polygon)
+- Insert and edit text
+- Save and load drawings locally in JSON format
+- Optimized for large screens and landscape orientation
 
-A few resources to get you started if this is your first Flutter project:
+## How to Run on an IFP
 
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
+1. Ensure Flutter is installed on your development machine
+2. Clone this repository
+3. Run `flutter pub get` to install dependencies
+4. Connect your IFP device or use an emulator
+5. Run `flutter run --release` to deploy the app
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+## App Architecture
+
+The app follows a clean architecture with:
+
+- **Models**: Data structures for strokes, shapes, and texts
+- **Services**: File handling and JSON serialization
+- **Widgets**: Reusable UI components
+- **Screens**: Main application screens
+
+## File Format
+
+Drawings are saved as JSON files with the following structure:
+
+```json
+{
+  "strokes": [
+    {
+      "points": [{"x": 10, "y": 10}, {"x": 15, "y": 20}],
+      "color": "#FF0000",
+      "width": 3
+    }
+  ],
+  "shapes": [
+    {
+      "type": "rectangle",
+      "topLeft": {"x": 50, "y": 50},
+      "bottomRight": {"x": 150, "y": 100},
+      "color": "#0000FF"
+    }
+  ],
+  "texts": [
+    {
+      "text": "Hello IFP!",
+      "position": {"x": 300, "y": 400},
+      "color": "#000000",
+      "size": 24
+    }
+  ]
+}
