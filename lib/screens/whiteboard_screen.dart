@@ -1,8 +1,13 @@
 import 'dart:io';
+import 'dart:ui' as ui;
+
+import 'package:external_path/external_path.dart';
 import 'package:flutter/material.dart';
-import 'package:file_picker/file_picker.dart';
-import '../models/stroke.dart';
+import 'package:flutter/rendering.dart';
+import 'package:permission_handler/permission_handler.dart';
+
 import '../models/shape.dart';
+import '../models/stroke.dart';
 import '../models/text_item.dart';
 import '../services/file_service.dart';
 import '../widgets/drawing_canvas.dart';
@@ -11,17 +16,23 @@ enum Tool { pen, rectangle, circle, line, text }
 
 class WhiteboardScreen extends StatefulWidget {
   final Map<String, dynamic>? loadedData;
-  const WhiteboardScreen({super.key, this.loadedData});
 
+  const WhiteboardScreen({super.key, this.loadedData});
 
   @override
   State<WhiteboardScreen> createState() => _WhiteboardScreenState();
 }
 
 class _WhiteboardScreenState extends State<WhiteboardScreen> {
-  late List<Stroke> _strokes = [];
-  late List<Shape> _shapes = [];
-  late List<TextItem> _texts = [];
+  final GlobalKey _canvasKey = GlobalKey();
+
+  List<Stroke> _strokes = [];
+  List<Shape> _shapes = [];
+  List<TextItem> _texts = [];
+
+  final List<List<dynamic>> _undoStack = [];
+  final List<List<dynamic>> _redoStack = [];
+
   Stroke? _currentStroke;
   Offset? _startShape;
   Offset? _endShape;
@@ -37,16 +48,103 @@ class _WhiteboardScreenState extends State<WhiteboardScreen> {
     }
   }
 
-  //This method maps the json into the respective types.
   void _loadFromJson(Map<String, dynamic> json) {
     if (json['strokes'] != null) {
-      _strokes = (json['strokes'] as List).map((e) => Stroke.fromJson(e)).toList();
+      _strokes =
+          (json['strokes'] as List).map((e) => Stroke.fromJson(e)).toList();
     }
     if (json['shapes'] != null) {
       _shapes = (json['shapes'] as List).map((e) => Shape.fromJson(e)).toList();
     }
     if (json['texts'] != null) {
-      _texts = (json['texts'] as List).map((e) => TextItem.fromJson(e)).toList();
+      _texts =
+          (json['texts'] as List).map((e) => TextItem.fromJson(e)).toList();
+    }
+  }
+
+  void _saveUndoState() {
+    _undoStack.add([
+      List<Stroke>.from(_strokes),
+      List<Shape>.from(_shapes),
+      List<TextItem>.from(_texts)
+    ]);
+    _redoStack.clear();
+  }
+
+  void _undo() {
+    if (_undoStack.isEmpty) return;
+    _redoStack.add([
+      List<Stroke>.from(_strokes),
+      List<Shape>.from(_shapes),
+      List<TextItem>.from(_texts)
+    ]);
+    final last = _undoStack.removeLast();
+    setState(() {
+      _strokes
+        ..clear()
+        ..addAll(last[0]);
+      _shapes
+        ..clear()
+        ..addAll(last[1]);
+      _texts
+        ..clear()
+        ..addAll(last[2]);
+    });
+  }
+
+  void _redo() {
+    if (_redoStack.isEmpty) return;
+    _undoStack.add([
+      List<Stroke>.from(_strokes),
+      List<Shape>.from(_shapes),
+      List<TextItem>.from(_texts)
+    ]);
+    final next = _redoStack.removeLast();
+    setState(() {
+      _strokes
+        ..clear()
+        ..addAll(next[0]);
+      _shapes
+        ..clear()
+        ..addAll(next[1]);
+      _texts
+        ..clear()
+        ..addAll(next[2]);
+    });
+  }
+
+  Future<void> _exportAsImage() async {
+    try {
+      final status = await Permission.manageExternalStorage.request();
+      if (!status.isGranted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Storage permission not granted')),
+        );
+        return;
+      }
+
+      final boundary = _canvasKey.currentContext!.findRenderObject()
+          as RenderRepaintBoundary;
+      final image = await boundary.toImage(pixelRatio: 3.0);
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+      final pngBytes = byteData!.buffer.asUint8List();
+
+      final path = await ExternalPath.getExternalStoragePublicDirectory(
+          ExternalPath.DIRECTORY_PICTURES);
+      final fileName =
+          'whiteboard_${DateTime.now().millisecondsSinceEpoch}.png';
+      final file = File('$path/$fileName');
+      await file.writeAsBytes(pngBytes);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Exported as PNG:\n$fileName')),
+        );
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Export failed: $e')),
+      );
     }
   }
 
@@ -56,7 +154,10 @@ class _WhiteboardScreenState extends State<WhiteboardScreen> {
       appBar: AppBar(
         title: const Text("Whiteboard"),
         actions: [
+          IconButton(icon: const Icon(Icons.undo), onPressed: _undo),
+          IconButton(icon: const Icon(Icons.redo), onPressed: _redo),
           IconButton(icon: const Icon(Icons.save), onPressed: _save),
+          IconButton(icon: const Icon(Icons.image), onPressed: _exportAsImage),
           PopupMenuButton<Color>(
             icon: Icon(Icons.color_lens, color: _selectedColor),
             onSelected: (color) => setState(() => _selectedColor = color),
@@ -75,6 +176,7 @@ class _WhiteboardScreenState extends State<WhiteboardScreen> {
       ),
       body: GestureDetector(
         onPanStart: (details) {
+          _saveUndoState();
           switch (_selectedTool) {
             case Tool.pen:
               _currentStroke =
@@ -143,26 +245,29 @@ class _WhiteboardScreenState extends State<WhiteboardScreen> {
             _showTextInput(details.localPosition);
           }
         },
-        child: Stack(
-          children: [
-            DrawingCanvas(
-              strokes: [
-                ..._strokes,
-                if (_currentStroke != null) _currentStroke!
-              ],
-              shapes: _shapes,
-              texts: _texts,
-            ),
-            if (_startShape != null && _endShape != null)
-              CustomPaint(
-                painter: _PreviewPainter(
-                  type: _selectedTool.name,
-                  start: _startShape!,
-                  end: _endShape!,
-                  color: _selectedColor,
-                ),
+        child: RepaintBoundary(
+          key: _canvasKey,
+          child: Stack(
+            children: [
+              DrawingCanvas(
+                strokes: [
+                  ..._strokes,
+                  if (_currentStroke != null) _currentStroke!
+                ],
+                shapes: _shapes,
+                texts: _texts,
               ),
-          ],
+              if (_startShape != null && _endShape != null)
+                CustomPaint(
+                  painter: _PreviewPainter(
+                    type: _selectedTool.name,
+                    start: _startShape!,
+                    end: _endShape!,
+                    color: _selectedColor,
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
       bottomNavigationBar: BottomNavigationBar(
@@ -199,6 +304,7 @@ class _WhiteboardScreenState extends State<WhiteboardScreen> {
             onPressed: () {
               final text = controller.text.trim();
               if (text.isNotEmpty) {
+                _saveUndoState();
                 setState(() {
                   _texts.add(TextItem(
                     text: text,
@@ -225,11 +331,11 @@ class _WhiteboardScreenState extends State<WhiteboardScreen> {
       texts: _texts,
     );
     if (mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text("Saved successfully!")));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Saved successfully!")),
+      );
     }
   }
-
 }
 
 class _PreviewPainter extends CustomPainter {
